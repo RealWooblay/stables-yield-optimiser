@@ -1,4 +1,4 @@
-import { getAnthropicClient, isIntelligenceAvailable } from './client'
+import { proxyAnthropicCall, isIntelligenceAvailable } from './client'
 import { sortByRAYS } from './risk-adjusted-yield'
 import type { YieldSource, StablecoinPeg } from '@/core/defi'
 import type { ActionDiff } from '@/core/mutation'
@@ -98,17 +98,15 @@ export async function resolveIntent(
   })
 
   try {
-    const client = getAnthropicClient()
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1500,
+    const response = await proxyAnthropicCall({
+      messages: [{ role: 'user', content: context }],
       system: INTENT_SYSTEM,
       tools: [INTENT_TOOL],
-      messages: [{ role: 'user', content: context }],
-    })
+      maxTokens: 1500,
+    }) as { content: Array<{ type: string; input?: unknown }> }
 
-    const toolUse = response.content.find((c) => c.type === 'tool_use')
-    if (!toolUse || toolUse.type !== 'tool_use') return null
+    const toolUse = response.content.find((c) => c.type === 'tool_use') as { input: unknown } | undefined
+    if (!toolUse) return null
 
     const parsed = toolUse.input as {
       targetApy: number | null

@@ -1,4 +1,4 @@
-import { getAnthropicClient, isIntelligenceAvailable } from './client'
+import { proxyAnthropicCall, isIntelligenceAvailable } from './client'
 import { YIELD_STORY_SYSTEM, YIELD_STORY_TOOL } from './prompts/yield-story'
 import { ANOMALY_DETECTION_SYSTEM, ANOMALY_DETECTION_TOOL } from './prompts/anomaly'
 import { OPPORTUNITY_SYSTEM, OPPORTUNITY_TOOL } from './prompts/opportunity'
@@ -16,6 +16,11 @@ function hashString(str: string): string {
   return hash.toString(36)
 }
 
+function extractToolUse(response: unknown): { input: unknown } | null {
+  const r = response as { content?: Array<{ type: string; input?: unknown }> }
+  return r?.content?.find((c) => c.type === 'tool_use') as { input: unknown } | null ?? null
+}
+
 export async function generateYieldStory(
   positions: Position[],
   sources: YieldSource[]
@@ -26,27 +31,19 @@ export async function generateYieldStory(
   const promptHash = hashString('yield-story')
   const contextHash = hashString(contextData)
 
-  // Check cache
   const cached = await getCachedIntelligence(promptHash, contextHash)
   if (cached) return cached as YieldStory
 
   try {
-    const client = getAnthropicClient()
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+    const response = await proxyAnthropicCall({
+      messages: [{ role: 'user', content: `Analyze this user's DeFi positions and yield sources:\n\n${contextData}` }],
       system: YIELD_STORY_SYSTEM,
       tools: [YIELD_STORY_TOOL],
-      messages: [
-        {
-          role: 'user',
-          content: `Analyze this user's DeFi positions and yield sources:\n\n${contextData}`,
-        },
-      ],
+      maxTokens: 1024,
     })
 
-    const toolUse = response.content.find((c) => c.type === 'tool_use')
-    if (!toolUse || toolUse.type !== 'tool_use') return null
+    const toolUse = extractToolUse(response)
+    if (!toolUse) return null
 
     const story: YieldStory = {
       ...(toolUse.input as Omit<YieldStory, 'generatedAt'>),
@@ -76,22 +73,15 @@ export async function detectAnomalies(
   if (cached) return cached as Anomaly[]
 
   try {
-    const client = getAnthropicClient()
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+    const response = await proxyAnthropicCall({
+      messages: [{ role: 'user', content: `Analyze this DeFi data for anomalies:\n\n${contextData}` }],
       system: ANOMALY_DETECTION_SYSTEM,
       tools: [ANOMALY_DETECTION_TOOL],
-      messages: [
-        {
-          role: 'user',
-          content: `Analyze this DeFi data for anomalies:\n\n${contextData}`,
-        },
-      ],
+      maxTokens: 1024,
     })
 
-    const toolUse = response.content.find((c) => c.type === 'tool_use')
-    if (!toolUse || toolUse.type !== 'tool_use') return []
+    const toolUse = extractToolUse(response)
+    if (!toolUse) return []
 
     const input = toolUse.input as { anomalies: Array<Omit<Anomaly, 'id' | 'detectedAt' | 'acknowledged'>> }
     const anomalies: Anomaly[] = input.anomalies.map((a, i) => ({
@@ -123,22 +113,15 @@ export async function surfaceOpportunities(
   if (cached) return cached as Opportunity[]
 
   try {
-    const client = getAnthropicClient()
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+    const response = await proxyAnthropicCall({
+      messages: [{ role: 'user', content: `Find yield opportunities based on current positions and available sources:\n\n${contextData}` }],
       system: OPPORTUNITY_SYSTEM,
       tools: [OPPORTUNITY_TOOL],
-      messages: [
-        {
-          role: 'user',
-          content: `Find yield opportunities based on current positions and available sources:\n\n${contextData}`,
-        },
-      ],
+      maxTokens: 1024,
     })
 
-    const toolUse = response.content.find((c) => c.type === 'tool_use')
-    if (!toolUse || toolUse.type !== 'tool_use') return []
+    const toolUse = extractToolUse(response)
+    if (!toolUse) return []
 
     const input = toolUse.input as { opportunities: Array<Omit<Opportunity, 'id' | 'detectedAt'>> }
     const opportunities: Opportunity[] = input.opportunities.map((o, i) => ({

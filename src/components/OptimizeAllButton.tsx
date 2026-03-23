@@ -3,15 +3,39 @@ import { usePositionStore } from '@/stores/position-store'
 import { useWalletStore } from '@/stores/wallet-store'
 import { useYieldStore } from '@/stores/yield-store'
 import { useUIStore } from '@/stores/ui-store'
-import { optimizePortfolio, type PortfolioSuggestion, type RiskProfile } from '@/intelligence/portfolio-optimizer'
+import { streamOptimize, type OptimizeEvent } from '@/intelligence/client'
+import { computePositionDiff, buildEusxLoopAction } from '@/mutation/diff'
 import { getTenantConfig, getEcosystemConfig, filterYieldSourcesForTenantActions, isTenantEcosystemPosition, USX_EUSX_MINT, ECOSYSTEM_OPTIONS, type EcosystemOption } from '@/config/tenant'
-import type { Position } from '@/core/defi'
+import type { Position, YieldSource } from '@/core/defi'
+import type { ActionDiff } from '@/core/mutation'
+
+type RiskProfile = 'conservative' | 'balanced' | 'aggressive'
 
 const PROFILES: Array<{ id: RiskProfile; label: string }> = [
   { id: 'conservative', label: 'Safe' },
   { id: 'balanced', label: 'Balanced' },
   { id: 'aggressive', label: 'Max Yield' },
 ]
+
+interface AgenticSuggestion {
+  headline: string
+  reasoning: string
+  allocations: Array<{
+    protocol: string
+    strategy: string
+    percentage: number
+    note?: string
+    source?: YieldSource
+    apy: number
+  }>
+  blendedApy: number
+  apyImprovement: number
+  stressTestSummary?: string
+  warnings?: string[]
+  actions: ActionDiff[]
+  currentBlendedApy: number
+  totalValue: number
+}
 
 function idleToPosition(b: { mint: string; symbol: string; uiAmount: number; valueUsd: number }, wallet: string): Position {
   return {
@@ -57,13 +81,13 @@ export function OptimizeAllButton() {
   const positions = usePositionStore((s) => s.positions)
   const balances = useWalletStore((s) => s.balances)
   const sources = useYieldStore((s) => s.sources)
-  const pegs = useYieldStore((s) => s.pegs)
   const openActionPanel = useUIStore((s) => s.openActionPanel)
   const addToast = useUIStore((s) => s.addToast)
   const [ecosystemId, setEcosystemId] = useState(() => ECOSYSTEM_OPTIONS.find(e => e.live)?.id ?? 'usx')
   const [riskProfile, setRiskProfile] = useState<RiskProfile>('balanced')
-  const [suggestion, setSuggestion] = useState<PortfolioSuggestion | null>(null)
+  const [suggestion, setSuggestion] = useState<AgenticSuggestion | null>(null)
   const [isOptimizing, setIsOptimizing] = useState(false)
+  const [thinkingSteps, setThinkingSteps] = useState<string[]>([])
 
   const tenant = getEcosystemConfig(ecosystemId) ?? getTenantConfig()
 
@@ -89,7 +113,6 @@ export function OptimizeAllButton() {
   const allPositions = useMemo(() => {
     const deployed = [...filteredPositions]
     for (const b of idleBalances) {
-      // Only skip eUSX wallet balance if there's already a pure eUSX position deployed (not PT-eUSX etc.)
       const alreadyCounted = deployed.some(
         (p) => p.protocol !== 'wallet' &&
           b.mint === USX_EUSX_MINT &&
@@ -116,17 +139,128 @@ export function OptimizeAllButton() {
     return Array.from(protos).slice(0, 6).join(' · ')
   }, [filteredSources])
 
-  const handleOptimize = () => {
+  const buildActionsFromRecommendation = (
+    rec: OptimizeEvent & { type: 'result' },
+    yieldSources: YieldSource[],
+    positions: Position[],
+    totalValue: number,
+  ): ActionDiff[] => {
+    const actions: ActionDiff[] = []
+    for (const alloc of rec.recommendation.allocations) {
+      const source = yieldSources.find(
+        (s) => s.protocol.toLowerCase() === alloc.protocol.toLowerCase() &&
+               (s.strategy.toLowerCase().includes(alloc.strategy.toLowerCase().split(' ')[0]) ||
+                alloc.strategy.toLowerCase().includes(s.strategy.toLowerCase().split(' ')[0]))
+      ) ?? yieldSources.find((s) => s.protocol.toLowerCase() === alloc.protocol.toLowerCase())
+
+      if (!source) continue
+
+      const suggestedValueUsd = (totalValue * alloc.percentage) / 100
+      const existingPosition = positions.find(
+        (p) => p.protocol === source.protocol && p.strategy === source.strategy
+      )
+
+      const isEusxLoop = (source.poolId ?? '').startsWith('eusx-loop') || /eusx.*loop/i.test(source.strategy)
+
+      if (isEusxLoop) {
+        const eusxHolding = positions.find((p) => p.protocol === 'wallet' && p.asset === 'eUSX')
+        const available = eusxHolding?.valueUsd ?? 0
+        const usxToConvert = available < suggestedValueUsd ? Math.max(0, suggestedValueUsd - available) : 0
+        actions.push(buildEusxLoopAction(suggestedValueUsd, source, usxToConvert))
+      } else if (existingPosition) {
+        actions.push(computePositionDiff(existingPosition, source, suggestedValueUsd))
+      } else {
+        const idle: Position = {
+          id: 'idle', wallet: '', protocol: 'wallet', strategy: 'idle',
+          asset: source.asset, amount: suggestedValueUsd, valueUsd: suggestedValueUsd,
+          apy: 0, apySources: [], riskLevel: 'low', riskFactors: [],
+          entryTimestamp: 0, lastUpdate: 0,
+        }
+        actions.push(computePositionDiff(idle, source, suggestedValueUsd))
+      }
+    }
+    return actions
+  }
+
+  const handleOptimize = async () => {
     if (!canOptimize) return
     setIsOptimizing(true)
-    setTimeout(() => {
-      const result = optimizePortfolio(allPositions, filteredSources, riskProfile, pegs?.value)
-      setSuggestion(result)
-      setIsOptimizing(false)
-      if (result.actions.length === 0) {
-        addToast({ type: 'info', title: "You're already optimal", message: 'No better yield found at this risk level.', duration: 4000 })
+    setThinkingSteps([])
+    setSuggestion(null)
+
+    const totalValue = allPositions.reduce((s, p) => s + p.valueUsd, 0)
+    const currentBlendedApy = totalValue > 0
+      ? allPositions.reduce((s, p) => s + (p.apy * p.valueUsd) / totalValue, 0)
+      : 0
+
+    try {
+      const gen = streamOptimize({
+        portfolio: {
+          positions: allPositions.map((p) => ({
+            id: p.id,
+            protocol: p.protocol,
+            strategy: p.strategy,
+            asset: p.asset,
+            amount: p.amount,
+            valueUsd: p.valueUsd,
+            apy: p.apy,
+            riskLevel: p.riskLevel,
+            riskFactors: p.riskFactors,
+          })),
+          totalValueUsd: totalValue,
+        },
+        yieldSources: filteredSources,
+        riskPreference: riskProfile,
+      })
+
+      for await (const event of gen) {
+        if (event.type === 'thinking') {
+          setThinkingSteps((prev) => [...prev, event.text])
+        } else if (event.type === 'result') {
+          const rec = event.recommendation
+          const actions = buildActionsFromRecommendation(
+            event as OptimizeEvent & { type: 'result' },
+            filteredSources,
+            allPositions,
+            totalValue,
+          )
+
+          // Enrich allocations with source data
+          const enriched = rec.allocations.map((alloc) => {
+            const source = filteredSources.find(
+              (s) => s.protocol.toLowerCase() === alloc.protocol.toLowerCase() &&
+                     (s.strategy.toLowerCase().includes(alloc.strategy.toLowerCase().split(' ')[0]) ||
+                      alloc.strategy.toLowerCase().includes(s.strategy.toLowerCase().split(' ')[0]))
+            ) ?? filteredSources.find((s) => s.protocol.toLowerCase() === alloc.protocol.toLowerCase())
+            return { ...alloc, source, apy: source?.apy ?? 0 }
+          })
+
+          const finalSuggestion: AgenticSuggestion = {
+            headline: rec.headline,
+            reasoning: rec.reasoning,
+            allocations: enriched,
+            blendedApy: rec.blendedApy,
+            apyImprovement: rec.apyImprovement,
+            stressTestSummary: rec.stressTestSummary,
+            warnings: rec.warnings,
+            actions,
+            currentBlendedApy,
+            totalValue,
+          }
+          setSuggestion(finalSuggestion)
+
+          if (actions.length === 0) {
+            addToast({ type: 'info', title: "You're already optimal", message: 'No better yield found at this risk level.', duration: 4000 })
+          }
+        } else if (event.type === 'error') {
+          addToast({ type: 'error', title: 'Optimizer error', message: event.message, duration: 5000 })
+        }
       }
-    }, 150)
+    } catch (err) {
+      addToast({ type: 'error', title: 'Failed to optimize', message: String(err), duration: 5000 })
+    } finally {
+      setIsOptimizing(false)
+    }
   }
 
   const handleExecuteAll = () => {
@@ -144,7 +278,7 @@ export function OptimizeAllButton() {
         estimatedGas: suggestion.actions.reduce((s, a) => s + a.estimatedGas, 0),
         riskDelta: 0,
         apyDelta: suggestion.apyImprovement,
-        projectedAnnualChange: (suggestion.suggestedBlendedApy - suggestion.currentBlendedApy) * suggestion.totalValue / 100,
+        projectedAnnualChange: (suggestion.blendedApy - suggestion.currentBlendedApy) * suggestion.totalValue / 100,
         steps: suggestion.actions.flatMap(a => a.steps),
       })
     }
@@ -159,10 +293,7 @@ export function OptimizeAllButton() {
     )
   }
 
-  const topAlloc = suggestion?.allocations[0]
   const annualGain = suggestion ? (suggestion.apyImprovement * suggestion.totalValue) / 100 : 0
-  const addIncentiveUsd = 100
-  const addIncentiveYr = suggestion ? (suggestion.suggestedBlendedApy * addIncentiveUsd) / 100 : 0
 
   return (
     <div className="space-y-3">
@@ -174,7 +305,7 @@ export function OptimizeAllButton() {
             <button
               key={eco.id}
               disabled={!eco.live}
-              onClick={() => { setEcosystemId(eco.id); setSuggestion(null) }}
+              onClick={() => { setEcosystemId(eco.id); setSuggestion(null); setThinkingSteps([]) }}
               className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                 ecosystemId === eco.id
                   ? 'bg-accent-blue/20 text-accent-blue border border-accent-blue/30'
@@ -195,7 +326,7 @@ export function OptimizeAllButton() {
         {PROFILES.map((p) => (
           <button
             key={p.id}
-            onClick={() => { setRiskProfile(p.id); setSuggestion(null) }}
+            onClick={() => { setRiskProfile(p.id); setSuggestion(null); setThinkingSteps([]) }}
             className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
               riskProfile === p.id
                 ? 'bg-accent-blue text-white'
@@ -209,13 +340,22 @@ export function OptimizeAllButton() {
 
       {/* Optimize button / scanning */}
       {isOptimizing ? (
-        <div className="rounded-lg bg-bg-secondary/20 px-3 py-3 text-center space-y-1">
-          <div className="flex items-center justify-center gap-2">
-            <div className="w-3 h-3 border-2 border-accent-blue/30 border-t-accent-blue rounded-full animate-spin" />
-            <span className="text-xs text-text-muted">Scanning…</span>
+        <div className="rounded-lg bg-bg-secondary/20 px-3 py-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 border-2 border-accent-blue/30 border-t-accent-blue rounded-full animate-spin shrink-0" />
+            <span className="text-xs text-text-muted">Claude is analyzing your portfolio…</span>
           </div>
-          {scanningProtocols && (
+          {scanningProtocols && thinkingSteps.length === 0 && (
             <p className="text-[10px] text-text-muted/50">{scanningProtocols}</p>
+          )}
+          {thinkingSteps.length > 0 && (
+            <div className="space-y-0.5 max-h-24 overflow-y-auto">
+              {thinkingSteps.slice(-4).map((step, i) => (
+                <p key={i} className={`text-[10px] ${i === thinkingSteps.slice(-4).length - 1 ? 'text-text-muted' : 'text-text-muted/40'} leading-relaxed`}>
+                  {step}
+                </p>
+              ))}
+            </div>
           )}
         </div>
       ) : (
@@ -232,75 +372,75 @@ export function OptimizeAllButton() {
       {suggestion && suggestion.actions.length > 0 && (
         <div className="space-y-3 pt-1">
 
-              {/* Headline */}
-          {topAlloc && (
-            <div className="rounded-lg bg-bg-secondary/20 px-3 py-2.5">
-              <p className="text-sm font-medium text-text-primary leading-snug">
-                {suggestion!.allocations.length === 1
-                  ? <>
-                      Move your USX to{' '}
-                      <span className="text-accent-blue capitalize">{topAlloc.source.protocol}</span>.{' '}
-                      {topAlloc.source.apy.toFixed(1)}%
-                      {topAlloc.source.strategy.toLowerCase().includes('fixed') ? ' fixed rate' : ''} —
-                      that&apos;s{' '}
-                      <span className="text-accent-green font-semibold">+${annualGain.toFixed(0)}/yr</span>.
-                    </>
-                  : <>
-                      Spread your USX across{' '}
-                      <span className="text-accent-blue">{suggestion!.allocations.length} strategies</span>.{' '}
-                      {suggestion!.suggestedBlendedApy.toFixed(1)}% blended —
-                      that&apos;s{' '}
-                      <span className="text-accent-green font-semibold">+${annualGain.toFixed(0)}/yr</span>.
-                    </>
-                }
-              </p>
-            </div>
-          )}
+          {/* Headline + reasoning */}
+          <div className="rounded-lg bg-bg-secondary/20 px-3 py-2.5 space-y-1.5">
+            <p className="text-sm font-medium text-text-primary leading-snug">{suggestion.headline}</p>
+            <p className="text-[11px] text-text-muted leading-relaxed">{suggestion.reasoning}</p>
+          </div>
 
           {/* APY delta */}
           <div className="flex items-baseline justify-between text-xs">
             <span className="text-text-muted">
-              {suggestion.currentBlendedApy.toFixed(2)}% now → {suggestion.suggestedBlendedApy.toFixed(2)}% optimised
+              {suggestion.currentBlendedApy.toFixed(2)}% now → {suggestion.blendedApy.toFixed(2)}% optimised
             </span>
             <span className="font-mono font-semibold text-accent-green">
               +{suggestion.apyImprovement.toFixed(2)}%
             </span>
           </div>
 
-          {/* All strategies — flat list */}
+          {/* Allocations */}
           {suggestion.allocations.map((alloc, i) => {
-            const isLoop = isLoopStrategy(alloc.source.poolId ?? '', alloc.source.strategy)
-            const hf = isLoop ? extractHealthFactor(alloc.source.riskFactors) : null
-            const riskLabel = alloc.source.riskLevel === 'low' ? 'Low risk'
-              : alloc.source.riskLevel === 'medium' ? 'Medium risk'
-              : 'Higher risk'
+            const source = alloc.source
+            const isLoop = source ? isLoopStrategy(source.poolId ?? '', source.strategy) : false
+            const hf = (isLoop && source) ? extractHealthFactor(source.riskFactors) : null
+            const riskLevel = source?.riskLevel ?? 'medium'
+            const riskLabel = riskLevel === 'low' ? 'Low risk' : riskLevel === 'medium' ? 'Medium risk' : 'Higher risk'
             return (
               <div key={i} className="flex items-start justify-between py-2 border-b border-border-primary/10 last:border-0">
                 <div className="flex items-start gap-2 min-w-0">
-                  <span className="font-mono text-xs text-accent-blue w-8 shrink-0 pt-0.5">{alloc.suggestedAllocation.toFixed(0)}%</span>
+                  <span className="font-mono text-xs text-accent-blue w-8 shrink-0 pt-0.5">{alloc.percentage.toFixed(0)}%</span>
                   <div className="min-w-0">
-                    <p className="text-sm text-text-primary capitalize truncate">{alloc.source.protocol}</p>
-                    <p className="text-[10px] text-text-muted truncate">{alloc.source.strategy}</p>
+                    <p className="text-sm text-text-primary capitalize truncate">{alloc.protocol}</p>
+                    <p className="text-[10px] text-text-muted truncate">{alloc.strategy}</p>
                     {isLoop && (
                       <p className="text-[10px] text-accent-blue/70 mt-0.5">
                         Leverage: deposit eUSX on Kamino → borrow USX → earn extra yield on top
-                        {hf !== null ? ` · Liquidation buffer: ${hf.toFixed(2)}×` : ''}
+                        {hf !== null ? ` · Liquidation buffer: ${hf?.toFixed(2)}×` : ''}
                       </p>
+                    )}
+                    {alloc.note && (
+                      <p className="text-[10px] text-text-muted/60 mt-0.5">{alloc.note}</p>
                     )}
                   </div>
                 </div>
                 <div className="text-right shrink-0 ml-2">
-                  <p className="font-mono text-xs text-accent-green">{alloc.source.apy.toFixed(2)}%</p>
-                  <p className={`text-[10px] ${riskDot(alloc.source.riskLevel)}`}>{riskLabel}</p>
+                  <p className="font-mono text-xs text-accent-green">{alloc.apy.toFixed(2)}%</p>
+                  <p className={`text-[10px] ${riskDot(riskLevel)}`}>{riskLabel}</p>
                 </div>
               </div>
             )
           })}
 
-          {/* Add more incentive */}
-          {suggestion.suggestedBlendedApy > 0 && (
+          {/* Stress test summary */}
+          {suggestion.stressTestSummary && (
+            <p className="text-[10px] text-text-muted/70 bg-bg-secondary/10 rounded px-2 py-1.5">
+              {suggestion.stressTestSummary}
+            </p>
+          )}
+
+          {/* Warnings */}
+          {suggestion.warnings && suggestion.warnings.length > 0 && (
+            <div className="space-y-1">
+              {suggestion.warnings.map((w, i) => (
+                <p key={i} className="text-[10px] text-yellow-400/80">⚠ {w}</p>
+              ))}
+            </div>
+          )}
+
+          {/* Annual gain teaser */}
+          {annualGain > 0 && (
             <p className="text-[10px] text-text-muted/60 text-center">
-              Add ${addIncentiveUsd} more USX → +${addIncentiveYr.toFixed(2)}/yr
+              +${annualGain.toFixed(0)}/yr on your current portfolio
             </p>
           )}
 

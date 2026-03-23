@@ -1,4 +1,8 @@
-import { getAnthropicClient, isIntelligenceAvailable } from './client'
+import { proxyAnthropicCall, isIntelligenceAvailable } from './client'
+
+type MessageParam = { role: 'user' | 'assistant'; content: string | unknown[] }
+type ContentBlock = { type: string; [k: string]: unknown }
+type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: unknown }
 import { sortByRAYS } from './risk-adjusted-yield'
 import { isIdleCapital } from '@/adapters/solana/token-registry'
 import { computePositionDiff } from '@/mutation/diff'
@@ -278,17 +282,15 @@ async function generateWithAI(ctx: AgentContext): Promise<IntelligenceItem[]> {
   })
 
   try {
-    const client = getAnthropicClient()
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
+    const response = await proxyAnthropicCall({
+      messages: [{ role: 'user', content: context }] as MessageParam[],
       system: AGENT_SYSTEM,
       tools: [AGENT_TOOL],
-      messages: [{ role: 'user', content: context }],
-    })
+      maxTokens: 2000,
+    }) as { content: ContentBlock[] }
 
-    const toolUse = response.content.find((c) => c.type === 'tool_use')
-    if (!toolUse || toolUse.type !== 'tool_use') {
+    const toolUse = response.content.find((c): c is ToolUseBlock => c.type === 'tool_use')
+    if (!toolUse) {
       return generateFallbackIntelligence(ctx)
     }
 
@@ -545,20 +547,18 @@ export async function askAgent(
   })
 
   try {
-    const client = getAnthropicClient()
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
+    const response = await proxyAnthropicCall({
+      messages: [{ role: 'user', content: context }] as MessageParam[],
       system: `You are a DeFi yield advisor for the tenant stablecoin (tenantStablecoin). Only cite APYs from relevantYieldSourcesOnly.
 Never recommend swapping the tenant stablecoin (e.g. USX) for USDG, USDC, USDT, or other stables for "yield". Stay in the tenant stable ecosystem.
 You may suggest deploying into USX vaults, moving between USX venues, or bringing other assets into USX — not exiting USX for another stable.
 Use allTokenBalances and deployedPositions exactly. Answer in 2-5 sentences.`,
-      messages: [{ role: 'user', content: context }],
-    })
+      maxTokens: 1000,
+    }) as { content: ContentBlock[] }
 
     const text = response.content
       .filter((c) => c.type === 'text')
-      .map((c) => c.type === 'text' ? c.text : '')
+      .map((c) => String(c.text ?? ''))
       .join('')
 
     const firstSentence = text.split('.')[0] ?? 'Analysis'
