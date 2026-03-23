@@ -1,0 +1,239 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+
+  --color-bg-primary: #0a0b0d;
+  --color-bg-secondary: #111318;
+  --color-bg-tertiary: #191c24;
+  --color-bg-elevated: #222633;
+  --color-border-primary: #1f2330;
+  --color-border-accent: #3b82f6;
+  --color-text-primary: #eaf0f6;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #5a6478;
+  --color-accent-blue: #3b82f6;
+  --color-accent-green: #10b981;
+  --color-accent-red: #ef4444;
+  --color-accent-yellow: #f59e0b;
+  --color-accent-purple: #8b5cf6;
+  --color-fresh: #10b981;
+  --color-stale: #f59e0b;
+  --color-expired: #ef4444;
+}
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-bg-primary text-text-primary antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border-primary);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-muted);
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-bg-secondary/80 backdrop-blur-xl border border-border-primary rounded-2xl;
+    box-shadow:
+      0 0 0 0.5px rgba(255,255,255,0.03) inset,
+      0 1px 2px rgba(0,0,0,0.3),
+      0 4px 16px rgba(0,0,0,0.15);
+    transition: border-color 0.2s ease, box-shadow 0.3s ease, transform 0.2s ease;
+  }
+
+  .glass-panel:hover {
+    border-color: rgba(59, 130, 246, 0.12);
+  }
+
+  .metric-glow {
+    box-shadow:
+      0 0 0 0.5px rgba(255,255,255,0.03) inset,
+      0 0 30px rgba(59, 130, 246, 0.06),
+      0 4px 16px rgba(0,0,0,0.2);
+  }
+
+  .btn-press {
+    transition: all 0.15s ease-out;
+  }
+  .btn-press:active {
+    transform: scale(0.97);
+  }
+
+  .btn-primary {
+    @apply px-5 py-2.5 rounded-xl bg-accent-blue text-white text-sm font-semibold;
+    @apply disabled:opacity-40 disabled:pointer-events-none;
+    transition: all 0.15s ease-out;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2), 0 0 12px rgba(59,130,246,0.15);
+  }
+  .btn-primary:hover {
+    filter: brightness(1.1);
+  }
+  .btn-primary:active {
+    transform: scale(0.97);
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 rounded-xl border border-border-primary text-text-secondary text-sm;
+    transition: all 0.15s ease-out;
+  }
+  .btn-secondary:hover {
+    @apply bg-bg-tertiary text-text-primary;
+  }
+  .btn-secondary:active {
+    transform: scale(0.97);
+  }
+
+  .btn-ghost {
+    @apply px-3 py-1.5 rounded-lg text-xs font-medium;
+    transition: all 0.15s ease-out;
+  }
+  .btn-ghost:hover {
+    @apply bg-bg-tertiary;
+  }
+  .btn-ghost:active {
+    transform: scale(0.97);
+  }
+
+  .shimmer {
+    background: linear-gradient(90deg, var(--color-bg-tertiary) 0%, var(--color-bg-elevated) 50%, var(--color-bg-tertiary) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.8s ease-in-out infinite;
+  }
+
+  .fade-in {
+    animation: fadeIn 0.35s ease-out;
+  }
+
+  .slide-up {
+    animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideInToast {
+  from { opacity: 0; transform: translateX(20px) scale(0.96); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes subtlePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes flow {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+
+.animate-in.slide-in-from-right {
+  animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-toast {
+  animation: slideInToast 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-subtle-pulse {
+  animation: subtlePulse 2s ease-in-out infinite;
+}
+
+.hero-gradient {
+  background: radial-gradient(ellipse 60% 50% at 50% 40%, rgba(59,130,246,0.08) 0%, transparent 100%);
+}
+
+@media (max-width: 768px) {
+  .glass-panel {
+    @apply rounded-xl;
+  }
+}
+
+/* Override Solana wallet adapter modal to match our theme */
+.wallet-adapter-modal-wrapper {
+  background-color: #111318 !important;
+  border: 1px solid #1f2330 !important;
+  border-radius: 1rem !important;
+}
+
+.wallet-adapter-modal-button-close {
+  background-color: #191c24 !important;
+}
+
+.wallet-adapter-button {
+  background-color: #191c24 !important;
+  border-radius: 0.75rem !important;
+  font-family: 'Inter', sans-serif !important;
+  transition: all 0.15s ease !important;
+}
+
+.wallet-adapter-button:hover {
+  background-color: #222633 !important;
+}
+
+.wallet-adapter-modal-title {
+  font-family: 'Inter', sans-serif !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em !important;
+}
+
+.wallet-adapter-modal-list li {
+  border-radius: 0.75rem !important;
+  overflow: hidden;
+}
+
+.wallet-adapter-modal-overlay {
+  background-color: rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(4px) !important;
+}
