@@ -4,7 +4,7 @@ import { useWalletStore } from '@/stores/wallet-store'
 import { useYieldStore } from '@/stores/yield-store'
 import { useUIStore } from '@/stores/ui-store'
 import { streamOptimize, type OptimizeEvent } from '@/intelligence/client'
-import { computePositionDiff, buildEusxLoopAction } from '@/mutation/diff'
+import { computePositionDiff, buildEusxLoopAction, buildWithdrawAction } from '@/mutation/diff'
 import { getTenantConfig, getEcosystemConfig, filterYieldSourcesForTenantActions, isTenantEcosystemPosition, USX_EUSX_MINT, ECOSYSTEM_OPTIONS, type EcosystemOption } from '@/config/tenant'
 import type { Position, YieldSource } from '@/core/defi'
 import type { ActionDiff } from '@/core/mutation'
@@ -146,6 +146,9 @@ export function OptimizeAllButton() {
     totalValue: number,
   ): ActionDiff[] => {
     const actions: ActionDiff[] = []
+    const matchedPositionIds = new Set<string>()
+
+    // 1. Build actions for each recommended allocation
     for (const alloc of rec.recommendation.allocations) {
       const source = yieldSources.find(
         (s) => s.protocol.toLowerCase() === alloc.protocol.toLowerCase() &&
@@ -161,10 +164,13 @@ export function OptimizeAllButton() {
                (p.strategy === source.strategy || p.strategy.toLowerCase().includes(source.strategy.toLowerCase().split(' ')[0]))
       )
 
+      // Track which positions are covered by the recommendation
+      if (existingPosition) matchedPositionIds.add(existingPosition.id)
+
       // Skip if user already has this exact position (within 20% value tolerance)
       if (existingPosition && existingPosition.apy > 0) {
         const valueDiff = Math.abs(existingPosition.valueUsd - suggestedValueUsd) / Math.max(existingPosition.valueUsd, 1)
-        if (valueDiff < 0.2) continue // already in this position, no action needed
+        if (valueDiff < 0.2) continue
       }
 
       const isEusxLoop = (source.poolId ?? '').startsWith('eusx-loop') || /eusx.*loop/i.test(source.strategy)
@@ -186,6 +192,17 @@ export function OptimizeAllButton() {
         actions.push(computePositionDiff(idle, source, suggestedValueUsd))
       }
     }
+
+    // 2. Withdraw from any deployed positions NOT in the recommendation
+    //    (skip wallet idle positions — those just get redeployed)
+    for (const pos of positions) {
+      if (pos.protocol === 'wallet') continue
+      if (pos.valueUsd < 1) continue
+      if (matchedPositionIds.has(pos.id)) continue
+      // This position is being abandoned — prepend a withdraw action
+      actions.unshift(buildWithdrawAction(pos))
+    }
+
     return actions
   }
 

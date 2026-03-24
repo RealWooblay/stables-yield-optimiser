@@ -1,6 +1,31 @@
 import type { ActionDiff } from '@/core/mutation'
 import type { Position, YieldSource } from '@/core/defi'
 
+/** Build a withdraw action for exiting a position. */
+export function buildWithdrawAction(position: Position): ActionDiff {
+  return {
+    id: `withdraw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: 'withdraw',
+    protocol: position.protocol,
+    strategy: position.strategy,
+    diffs: [
+      { field: 'amount', before: position.valueUsd, after: 0 },
+      { field: 'apy', before: position.apy, after: 0, changePercent: -100 },
+    ],
+    estimatedFees: 0.001,
+    estimatedGas: 200_000,
+    riskDelta: 0,
+    apyDelta: -position.apy,
+    projectedAnnualChange: -(position.valueUsd * position.apy) / 100,
+    steps: [{
+      id: `withdraw-${position.protocol}`,
+      label: `Withdraw from ${position.protocol}`,
+      instruction: `Withdraw $${position.valueUsd.toFixed(0)} ${position.asset} from ${position.strategy}`,
+      status: 'pending',
+    }],
+  }
+}
+
 /** Build a deposit action for idle capital → yield source. */
 export function buildDepositAction(
   amount: number,
