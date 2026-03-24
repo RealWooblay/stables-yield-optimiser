@@ -157,8 +157,15 @@ export function OptimizeAllButton() {
 
       const suggestedValueUsd = (totalValue * alloc.percentage) / 100
       const existingPosition = positions.find(
-        (p) => p.protocol === source.protocol && p.strategy === source.strategy
+        (p) => p.protocol === source.protocol &&
+               (p.strategy === source.strategy || p.strategy.toLowerCase().includes(source.strategy.toLowerCase().split(' ')[0]))
       )
+
+      // Skip if user already has this exact position (within 20% value tolerance)
+      if (existingPosition && existingPosition.apy > 0) {
+        const valueDiff = Math.abs(existingPosition.valueUsd - suggestedValueUsd) / Math.max(existingPosition.valueUsd, 1)
+        if (valueDiff < 0.2) continue // already in this position, no action needed
+      }
 
       const isEusxLoop = (source.poolId ?? '').startsWith('eusx-loop') || /eusx.*loop/i.test(source.strategy)
 
@@ -232,7 +239,7 @@ export function OptimizeAllButton() {
                      (s.strategy.toLowerCase().includes(alloc.strategy.toLowerCase().split(' ')[0]) ||
                       alloc.strategy.toLowerCase().includes(s.strategy.toLowerCase().split(' ')[0]))
             ) ?? filteredSources.find((s) => s.protocol.toLowerCase() === alloc.protocol.toLowerCase())
-            return { ...alloc, source, apy: source?.apy ?? 0 }
+            return { ...alloc, source, apy: alloc.apy ?? source?.apy ?? 0 }
           })
 
           const finalSuggestion: AgenticSuggestion = {
@@ -370,78 +377,59 @@ export function OptimizeAllButton() {
 
       {/* Results */}
       {suggestion && suggestion.actions.length > 0 && (
-        <div className="space-y-3 pt-1">
+        <div className="space-y-2.5 pt-1">
 
           {/* Headline + reasoning */}
-          <div className="rounded-lg bg-bg-secondary/20 px-3 py-2.5 space-y-1.5">
+          <div className="rounded-lg bg-bg-secondary/20 px-3 py-2 space-y-1">
             <p className="text-sm font-medium text-text-primary leading-snug">{suggestion.headline}</p>
             <p className="text-[11px] text-text-muted leading-relaxed">{suggestion.reasoning}</p>
           </div>
 
           {/* APY delta */}
-          <div className="flex items-baseline justify-between text-xs">
+          <div className="flex items-baseline justify-between text-xs px-0.5">
             <span className="text-text-muted">
-              {suggestion.currentBlendedApy.toFixed(2)}% now → {suggestion.blendedApy.toFixed(2)}% optimised
+              {suggestion.currentBlendedApy.toFixed(2)}% → {suggestion.blendedApy.toFixed(2)}%
             </span>
             <span className="font-mono font-semibold text-accent-green">
-              +{suggestion.apyImprovement.toFixed(2)}%
+              +{suggestion.apyImprovement.toFixed(2)}%{annualGain > 0 ? ` (+$${annualGain.toFixed(0)}/yr)` : ''}
             </span>
           </div>
 
           {/* Allocations */}
           {suggestion.allocations.map((alloc, i) => {
             const source = alloc.source
-            const isLoop = source ? isLoopStrategy(source.poolId ?? '', source.strategy) : false
+            const isLoop = source ? isLoopStrategy(source.poolId ?? '', source.strategy) : /loop/i.test(alloc.strategy)
             const hf = (isLoop && source) ? extractHealthFactor(source.riskFactors) : null
             const riskLevel = source?.riskLevel ?? 'medium'
-            const riskLabel = riskLevel === 'low' ? 'Low risk' : riskLevel === 'medium' ? 'Medium risk' : 'Higher risk'
+            const riskLabel = riskLevel === 'low' ? 'Low' : riskLevel === 'medium' ? 'Med' : 'High'
             return (
-              <div key={i} className="flex items-start justify-between py-2 border-b border-border-primary/10 last:border-0">
-                <div className="flex items-start gap-2 min-w-0">
-                  <span className="font-mono text-xs text-accent-blue w-8 shrink-0 pt-0.5">{alloc.percentage.toFixed(0)}%</span>
+              <div key={i} className="flex items-center justify-between py-1.5 border-b border-border-primary/10 last:border-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-mono text-[11px] text-accent-blue w-7 shrink-0">{alloc.percentage.toFixed(0)}%</span>
                   <div className="min-w-0">
-                    <p className="text-sm text-text-primary capitalize truncate">{alloc.protocol}</p>
-                    <p className="text-[10px] text-text-muted truncate">{alloc.strategy}</p>
-                    {isLoop && (
-                      <p className="text-[10px] text-accent-blue/70 mt-0.5">
-                        Leverage: deposit eUSX on Kamino → borrow USX → earn extra yield on top
-                        {hf !== null ? ` · Liquidation buffer: ${hf?.toFixed(2)}×` : ''}
-                      </p>
-                    )}
-                    {alloc.note && (
-                      <p className="text-[10px] text-text-muted/60 mt-0.5">{alloc.note}</p>
-                    )}
+                    <p className="text-xs text-text-primary capitalize truncate">
+                      {alloc.protocol}
+                      {isLoop ? ' loop' : ''}
+                      {hf !== null ? ` · HF ${hf.toFixed(2)}` : ''}
+                    </p>
+                    {alloc.note && <p className="text-[10px] text-text-muted/60 truncate">{alloc.note}</p>}
                   </div>
                 </div>
-                <div className="text-right shrink-0 ml-2">
-                  <p className="font-mono text-xs text-accent-green">{alloc.apy.toFixed(2)}%</p>
-                  <p className={`text-[10px] ${riskDot(riskLevel)}`}>{riskLabel}</p>
+                <div className="flex items-center gap-2 shrink-0 ml-2">
+                  <span className="font-mono text-xs text-accent-green">{alloc.apy.toFixed(2)}%</span>
+                  <span className={`text-[9px] ${riskDot(riskLevel)}`}>{riskLabel}</span>
                 </div>
               </div>
             )
           })}
 
-          {/* Stress test summary */}
-          {suggestion.stressTestSummary && (
-            <p className="text-[10px] text-text-muted/70 bg-bg-secondary/10 rounded px-2 py-1.5">
-              {suggestion.stressTestSummary}
-            </p>
-          )}
-
-          {/* Warnings */}
+          {/* Warnings — max 2 */}
           {suggestion.warnings && suggestion.warnings.length > 0 && (
             <div className="space-y-1">
-              {suggestion.warnings.map((w, i) => (
-                <p key={i} className="text-[10px] text-yellow-400/80">⚠ {w}</p>
+              {suggestion.warnings.slice(0, 2).map((w, i) => (
+                <p key={i} className="text-[10px] text-yellow-400/70">{w}</p>
               ))}
             </div>
-          )}
-
-          {/* Annual gain teaser */}
-          {annualGain > 0 && (
-            <p className="text-[10px] text-text-muted/60 text-center">
-              +${annualGain.toFixed(0)}/yr on your current portfolio
-            </p>
           )}
 
           <button onClick={handleExecuteAll} className="btn-primary w-full py-2.5 rounded-lg text-sm font-semibold">

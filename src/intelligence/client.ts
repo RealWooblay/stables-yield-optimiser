@@ -33,7 +33,7 @@ export type OptimizeEvent =
       recommendation: {
         headline: string
         reasoning: string
-        allocations: Array<{ protocol: string; strategy: string; percentage: number; note?: string }>
+        allocations: Array<{ protocol: string; strategy: string; percentage: number; apy?: number; note?: string }>
         blendedApy: number
         apyImprovement: number
         stressTestSummary?: string

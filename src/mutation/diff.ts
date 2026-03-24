@@ -24,7 +24,7 @@ export function buildDepositAction(
     steps: [{
       id: `deposit-${target.protocol}`,
       label: `Deposit ${asset} into ${target.protocol}`,
-      instruction: `Deposit ~$${amount.toFixed(0)} ${asset} into ${target.strategy} on ${target.protocol}`,
+      instruction: `Deposit $${amount.toFixed(0)} ${asset} into ${target.strategy}`,
       status: 'pending',
     }],
   }
@@ -58,13 +58,13 @@ export function buildMigrateAction(
       {
         id: 'withdraw',
         label: `Withdraw from ${current.protocol}`,
-        instruction: `Withdraw ~$${amount.toFixed(0)} ${current.asset} from ${current.strategy}`,
+        instruction: `Withdraw $${amount.toFixed(0)} ${current.asset}`,
         status: 'pending',
       },
       {
         id: 'deposit',
         label: `Deposit into ${target.protocol}`,
-        instruction: `Deposit into ${target.strategy} on ${target.protocol}`,
+        instruction: `Deposit $${amount.toFixed(0)} into ${target.strategy}`,
         status: 'pending',
       },
     ],
@@ -95,9 +95,9 @@ export function buildLoopAction(
     apyDelta: target.apy,
     projectedAnnualChange: (amount * target.apy) / 100,
     steps: [
-      { id: 'supply', label: `Supply ${asset}`, instruction: `Supply ~$${amount.toFixed(0)} ${asset} to ${target.protocol}`, status: 'pending' },
-      { id: 'borrow', label: `Borrow ${asset}`, instruction: `Borrow ${asset} against collateral (${leverage}x leverage)`, status: 'pending' },
-      { id: 'resupply', label: `Re-supply ${asset}`, instruction: `Re-deposit borrowed ${asset} to compound yield`, status: 'pending' },
+      { id: 'supply', label: `Supply ${asset}`, instruction: `Supply $${amount.toFixed(0)} ${asset} on ${target.protocol}`, status: 'pending' },
+      { id: 'borrow', label: `Borrow ${asset}`, instruction: `Borrow ${asset} (${leverage}x leverage)`, status: 'pending' },
+      { id: 'resupply', label: `Re-supply ${asset}`, instruction: `Re-deposit borrowed ${asset}`, status: 'pending' },
     ],
   }
 }
@@ -114,8 +114,8 @@ export function buildEusxLoopAction(
   const deployVenue = target.strategy.replace(/eUSX (leverage|max leverage) loop → /i, '') || target.protocol
   const convertStep = usxToConvert > 0 ? [{
     id: 'convert-usx',
-    label: `Convert ~$${usxToConvert.toFixed(0)} USX → eUSX`,
-    instruction: `Go to app.solstice.finance → swap ~$${usxToConvert.toFixed(0)} USX for eUSX so you have enough eUSX to deposit as collateral`,
+    label: `Swap $${usxToConvert.toFixed(0)} USX → eUSX`,
+    instruction: `Swap $${usxToConvert.toFixed(0)} USX → eUSX on Solstice`,
     status: 'pending' as const,
   }] : []
 
@@ -135,9 +135,9 @@ export function buildEusxLoopAction(
     projectedAnnualChange: (eusxAmount * target.apy) / 100,
     steps: [
       ...convertStep,
-      { id: 'deposit-eusx', label: 'Deposit eUSX on Kamino as collateral', instruction: `Deposit ~$${eusxAmount.toFixed(0)} eUSX as collateral on app.kamino.finance — eUSX continues earning its base yield while deposited`, status: 'pending' },
-      { id: 'borrow-usx', label: 'Borrow USX against your eUSX', instruction: 'Borrow USX from Kamino — keep borrow below 75% LTV to avoid liquidation', status: 'pending' },
-      { id: 'deploy-usx', label: `Deposit borrowed USX on ${deployVenue}`, instruction: `Deposit the borrowed USX into ${deployVenue} to stack additional yield on top of your eUSX base rate`, status: 'pending' },
+      { id: 'deposit-eusx', label: 'Deposit eUSX as Kamino collateral', instruction: `Deposit $${eusxAmount.toFixed(0)} eUSX as collateral`, status: 'pending' },
+      { id: 'borrow-usx', label: 'Borrow USX', instruction: 'Borrow USX (stay below 75% LTV)', status: 'pending' },
+      { id: 'deploy-usx', label: `Deploy on ${deployVenue}`, instruction: `Deploy borrowed USX on ${deployVenue}`, status: 'pending' },
     ],
   }
 }
